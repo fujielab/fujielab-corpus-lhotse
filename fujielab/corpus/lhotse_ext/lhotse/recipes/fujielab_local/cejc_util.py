@@ -3,6 +3,35 @@ import pandas as pd
 from typing import List, Dict, Any 
 from dataclasses import dataclass, field
 
+class SpeakerInfoInSession:
+    """
+    SpeakerInfoInSession manages mappings between speaker labels, their corresponding IDs, and associated WAV filenames within a session.
+
+    Attributes:
+        label2id (dict): A dictionary mapping speaker labels (str) to unique speaker IDs (int or str).
+        id2label (dict): A dictionary mapping speaker IDs (int or str) back to their corresponding labels (str).
+        id2wavfilename (dict): A dictionary mapping speaker IDs (int or str) to their associated WAV filenames (str).
+
+    Example:
+        label2id = {'C001_000': 'IC01_玲子', 'C001_001': 'IC02_夏樹'}
+        id2label = {'IC01_玲子': 'C001_000', 'IC02_夏樹': 'C001_001'}
+        id2wavfilename = {'C001_000': 'C001_001_IC01.wav', 'C001_001': 'C001_001_IC02.wav'}
+        speaker_info = SpeakerInfoInSession(label2id, id2label, id2wavfilename)
+
+    Note:
+        - This class is useful for managing speaker information in multi-speaker audio processing tasks.
+        - Ensure that the dictionaries are consistent and cover the same set of speakers.
+    """
+    def __init__(
+        self,
+        label2id: Dict[str, str],
+        id2label: Dict[str, str],
+        id2wavfilename: Dict[str, str]
+    ):
+        self.label2id = label2id
+        self.id2label = id2label
+        self.id2wavfilename = id2wavfilename
+
 class CEJCSpeakerInfo:
     """CEJC（日常会話コーパス）の話者情報を扱うクラス
     """
@@ -16,6 +45,7 @@ class CEJCSpeakerInfo:
         Args:
             cejc_dir: CEJCのディレクトリパス（CEJC2304がある場合はそちらを指定するのが吉）
             cejc_orig_dir: CEJCのオリジナルデータのディレクトリパス（指定しない場合は cejc_dir と同じものとして扱う）
+            cejc_safia_dir: CEJCのSAFIAデータのディレクトリパス（指定しない場合は cejc_dir と同じものとして扱う）
         """
 
         # ディレクトリパスの設定
@@ -57,7 +87,6 @@ class CEJCSpeakerInfo:
                 wav_filenames.append(None)
         self.df['音声ファイル名'] = wav_filenames
 
-
     def get_session_id_list(self) -> List[str]:
         """会話IDのリストを取得する
 
@@ -73,17 +102,15 @@ class CEJCSpeakerInfo:
             話者IDのリスト
         """
         return self.df['話者ID改'].unique().tolist()
-    
-    def get_speaker_info_in_session(self, session_id: str) -> Dict[str, Dict[str, str]]:
+
+    def get_speaker_info_in_session(self, session_id: str) -> SpeakerInfoInSession:
         """会話IDに対する話者情報を取得する.
 
         Args:
             session_id: 会話ID
         
         Returns:
-            results["label2id"]: 話者ラベルから話者IDへの辞書
-            results["id2label"]: 話者IDから話者ラベルへの辞書
-            results["id2wavfilename"]: 話者IDから音声ファイル名への辞書
+            SpeakerInfoInSession object
         """
         subdf = self.df[self.df['会話ID'] == session_id]
         if len(subdf) == 0:
@@ -95,11 +122,7 @@ class CEJCSpeakerInfo:
             label2id[row['話者ラベル']] = row['話者ID改']
             id2label[row['話者ID改']] = row['話者ラベル']
             id2wavfilename[row['話者ID改']] = row['音声ファイル名']
-        return {
-            'label2id': label2id,
-            'id2label': id2label,
-            'id2wavfilename': id2wavfilename
-        }
+        return SpeakerInfoInSession(label2id, id2label, id2wavfilename)
     
     def get_session_data_dirpath(self, session_id: str, mode: str='none') -> str:
         """会話IDに対するデータディレクトリのパスを取得する
@@ -181,14 +204,18 @@ class CEJCSpeakerInfo:
 
 @dataclass
 class MorphInfo:
-    """形態素情報"""
-    text: str # 書字形
-    pron: str # 発音形
-    is_filler: bool = False     # フィラーかどうか
-    is_disfluency: bool = False # 非流暢（言いよどみ）かどうか
-    has_pause: bool = False     # 次に休止があるか
-    has_border: bool = False    # 次に文境境界があるか
-    is_privacy: bool = False    # 仮名かどうか
+    """短単位形態素情報"""
+    text: str                     # 書字形
+    tagged_text: str              # タグ付き書字形
+    pron: str                     # 発音
+    pos: str                      # 品詞
+    # is_filler: bool = False     # フィラーかどうか
+    # is_disfluency: bool = False # 非流暢（言いよどみ）かどうか
+    # has_pause: bool = False     # 次に休止があるか
+    # has_border: bool = False    # 次に文境境界があるか
+    bunsetsu_head_flag: str = ''  # 文節頭フラグ（B, I)
+    is_privacy: bool = False      # 仮名かどうか
+    tags: List[str] = field(default_factory=list)  # タグのリスト ['L', 'F', 'X'] など
 
 
 @dataclass
@@ -199,38 +226,35 @@ class UtteranceInfo:
     end_time: float              # 発話終了時刻
     utterance_id: str = ''       # ESPnetで使うための発話ID
     morphs: List[MorphInfo] = field(default_factory=list) # 形態素情報のリスト
-    utterance_text: str = ''     # 発話テキスト（文節区切りなし）
-    utterance_pron: str = ''     # 発話発音（モーラ単位，文節区切り，特殊記号あり）
+    text: str = ''               # 発話テキスト（書字形, 形態素ごとにスペース区切り，文節区切りは '|'）
+    pron: str = ''               # 発話発音（発音形, 形態素ごとにスペース区切り，文節区切りは '|'）
+    tag: str = ''                # 発話タグ（形態素のタグをカンマ区切りで．文節区切りは'|')
+    pos: str = ''               # 発話品詞（形態素の品詞をスペース区切りで．文節区切りは'|')
 
 class CEJCTextData:
     """CEJC（日常会話コーパス）のテキストデータを扱うクラス"""
     def __init__(self, 
                  suw_filename: str, 
                  luw_filename: str,
-                 speaker_info: Dict[str, Dict[str, str]],
-                 min_gap_dur: float=0.3, 
-                 max_utt_dur: float=10.0):
+                 speaker_info: SpeakerInfoInSession):
         """コンストラクタ
-
         Args:
-            filename: SUWファイルのパス
-            min_gap_dur: 発話間の最小間隔時間（秒）
-            max_utt_dur: 発話の最大時間（秒）
+            suw_filename: SUWファイルのパス
+            luw_filename: LUWファイルのパス
+            speaker_info: SpeakerInfoInSessionオブジェクト
         """
-        self.suw_fileanme = suw_filename
-        self.luw_filename = luw_filename
-        self.speaker_info = speaker_info
-        self.min_gap_dur = min_gap_dur
-        self.max_utt_dur = max_utt_dur
+        self.suw_filename: str = suw_filename
+        self.luw_filename: str = luw_filename
+        self.speaker_info: SpeakerInfoInSession = speaker_info
 
-        self.text_info = self._construct_text_info()
+        self.text_info: List[UtteranceInfo] = self._construct_text_info()
 
-    def _construct_text_info(self):
+    def _construct_text_info(self) -> List[UtteranceInfo]:
         """テキスト情報を構築する"""
 
         label2id = self.speaker_info['label2id']
         id2wavfilename = self.speaker_info['id2wavfilename']
-        suw_df = pd.read_csv(self.suw_fileanme, encoding='shift-jis')
+        suw_df = pd.read_csv(self.suw_filename, encoding='shift-jis')
         luw_df = pd.read_csv(self.luw_filename, encoding='shift-jis')
 
         # 話者ラベルのユニークなリストを取得
@@ -241,9 +265,11 @@ class CEJCTextData:
         utterance_info_list = []
         # 話者ラベルごとに処理
         for speaker_label in speaker_labels:
+            # 当該話者のSUWとLUW情報を取得
             subdf_suw = suw_df[suw_df['話者ラベル'] == speaker_label]
             subdf_luw = luw_df[luw_df['話者ラベル'] == speaker_label]
 
+            # WAVファイル名がない話者はスキップ
             speaker_id = label2id[speaker_label]
             wav_filename = id2wavfilename[speaker_id]
             if wav_filename is None:
@@ -254,62 +280,87 @@ class CEJCTextData:
             current_utterance_info = None
             luw_index = -1
             luw_pron = ''
-            for suw_index, row in subdf_suw.iterrows():
+            prev_tag_list = []
+            for i, row in subdf_suw.iterrows():
                 speaker_label = row['話者ラベル']
                 start_time = row['転記単位の開始時刻']
                 end_time = row['転記単位の終了時刻']
+                
+                text = row['書字形']
+                pos = row['品詞']
+                tagged_text = row['タグ付き書字形']
                 pron = row['発音']
+                is_privacy = row['仮名'] == 1
 
+                # タグリストの更新
+                tag_list = prev_tag_list[:] # 前回のタグリストのコピー
+                tagged_text_ = tagged_text  # タグ付き書字形を一時的に保存
+                # タグ文字は '(' の次だけ抽出．'(' の次には必ず1文字のアルファベットがタグ名として入る
+                i = 0
+                while i < len(tagged_text_):
+                    if tagged_text_[i] == '(' and i + 1 < len(tagged_text_):
+                        # '('が見つかったらその次の文字をタグリストに追加
+                        tag_list.append(tagged_text_[i+1])
+                        prev_tag_list.append(tagged_text_[i+1])
+                        i += 2  # skip '(' and tag character
+                    elif tagged_text_[i] == ')':
+                        # ')'が見つかったらタグリストから最後のタグを削除
+                        if prev_tag_list:
+                            prev_tag_list.pop()
+                        i += 1
+                    else:
+                        i += 1
+
+
+                # LUWとの対応を取るための発音系列の決定.
+                # 例外的に，発音が'('で始まる場合は，直前に同じ発音があったときのみ対象とする．
+                pron_to_be_matched = pron
                 if pron.startswith('('):
-                    pron = pron[1:-1]
                     if current_utterance_info is not None and \
                         len(current_utterance_info.morphs) > 0 and \
                         current_utterance_info.morphs[-1].pron == pron:
-                            continue
-                
-                morph_info = MorphInfo(
-                    text=row['書字形'], 
-                    pron=pron,
-                    is_filler=row['品詞'] == '感動詞-フィラー', 
-                    is_disfluency=row['品詞'] == '言いよどみ',
-                    is_privacy=row['仮名'] == 1)
-                
+                        pron_to_be_matched = pron[1:-1] # 括弧を除去
+                    else:
+                        pron_to_be_matched = ""
+
+                # Update LUW pronunciation and bunstetsu head flag
                 if luw_pron == '':
                     luw_index += 1
                     if luw_index < len(subdf_luw):
                         luw_pron = subdf_luw['発音'].iloc[luw_index]
-                        has_border = subdf_luw['文節頭フラグ'].iloc[luw_index] == 'B'
+                        bunsetsu_head_flag = subdf_luw['文節頭フラグ'].iloc[luw_index]
                         if '(' in luw_pron:
                             next_luw_pron = subdf_luw['発音'].iloc[luw_index + 1]
                             while '(' in luw_pron and '(' in next_luw_pron and \
                                 (luw_pron in next_luw_pron or next_luw_pron in luw_pron):
                                 luw_pron = next_luw_pron if len(next_luw_pron) > len(luw_pron) else luw_pron
                                 luw_index += 1
+                                if luw_index >= len(subdf_luw):
+                                    break
                                 next_luw_pron = subdf_luw['発音'].iloc[luw_index + 1]
                         if '(' in luw_pron:
                             luw_pron = luw_pron.replace('(', '').replace(')', '')
-                        
-                        # while luw_pron.startswith('(') and subdf_luw['発音'].iloc[luw_index + 1].startswith(luw_pron):
-                        #     luw_index += 1
-                        #     luw_pron = subdf_luw['発音'].iloc[luw_index]
-                        # if luw_pron.startswith('('):
-                        #     luw_pron = luw_pron.replace('(', '').replace(')', '')
-                        
-                        if has_border and \
-                           current_utterance_info is not None and \
-                                len(current_utterance_info.morphs) > 0:
-                                current_utterance_info.morphs[-1].has_border = True
                     else:
                         luw_pron = ''
+
+                morph_info = MorphInfo(
+                    text=text,
+                    tagged_text=tagged_text,
+                    pron=pron,
+                    pos=pos,
+                    bunsetsu_head_flag=bunsetsu_head_flag,
+                    is_privacy=is_privacy,
+                    tags=tag_list
+                )
                 
-                if luw_pron.startswith(morph_info.pron):
-                    luw_pron = luw_pron[len(morph_info.pron):]
-                elif pron == '◇':
-                    continue
-                else:
-                    # 警告を表示
-                    print('Warning: LUW and SUW are not matched: {} vs. {} at {}'.format(luw_pron, morph_info.pron, (speaker_label, start_time, end_time)), flush=True)
-                    pass
+                # consume LUW pronunciation
+                if len(pron_to_be_matched) > 0:
+                    if luw_pron.startswith(pron_to_be_matched):
+                        luw_pron = luw_pron[len(pron_to_be_matched):]
+                    else:
+                        # 警告を表示
+                        print('Warning: LUW and SUW are not matched: {} vs. {} at {}'.format(luw_pron, pron_to_be_matched (speaker_label, start_time, end_time)), flush=True)
+                        pass
                 
                 if current_utterance_info is None:
                     current_utterance_info = UtteranceInfo(
@@ -319,25 +370,10 @@ class CEJCTextData:
                         end_time=end_time,
                         morphs=[morph_info])
                 else:
-                    is_in_sentence = row['文頭フラグ'] == 'I'
-                    gap = start_time - current_utterance_info.end_time
-                    is_speaker_changed = speaker_label != current_utterance_info.speaker_label  # this is always False
+                    is_speaker_changed = speaker_label != current_utterance_info.speaker_label # should be always False
                     is_in_same_trans_unit = end_time == current_utterance_info.end_time
-                    is_under_min_gap = start_time - current_utterance_info.end_time < self.min_gap_dur
-                    is_over_max_utt = end_time - current_utterance_info.start_time > self.max_utt_dur
 
-                    # 接続する条件:
-                    #    文内なら接続
-                    #    話者が変わってない場合，ギャップ未満の無音時間で，接続した際に最大発話時間を超えない場合
-                    # if  is_in_sentence or \
-                    if is_in_same_trans_unit or \
-                    (not is_speaker_changed and \
-                        is_under_min_gap and not is_over_max_utt):
-                        # ポーズがある場合はフラグを立てる
-                        if start_time - current_utterance_info.end_time > 0.1:
-                            morph_info.has_pause = True
-                        # 終了時間を更新
-                        current_utterance_info.end_time = end_time
+                    if is_in_same_trans_unit:
                         # 形態素情報を追加
                         current_utterance_info.morphs.append(morph_info)                 
                     else:
@@ -352,183 +388,90 @@ class CEJCTextData:
             if current_utterance_info is not None:
                 utterance_info_list.append(current_utterance_info)
         
-        # # Step 2. 形態素情報の修正をする
-        # # 発音に '(ロギーン)' のように括弧がついている場合，
-        # # 同じ内容を持つ後続の形態素情報は削除し，()記号も削除する
-        # for suw_index in range(len(utterance_info_list)):
-        #     morphs = utterance_info_list[suw_index].morphs
-        #     new_morphs = []
-        #     current_morph = None
-        #     for j in range(len(morphs)):
-        #         morph = morphs[j]
-        #         if morph.pron.startswith('(') and morph.pron.endswith(')'):
-        #             if current_morph is None:
-        #                 current_morph = morph
-        #                 current_morph.pron = current_morph.pron[1:-1]
-        #             else:
-        #                 current_morph.text += morph.text
-        #         else:
-        #             if current_morph is not None:
-        #                 new_morphs.append(current_morph)
-        #                 current_morph = None
-        #             new_morphs.append(morph)
-        #     if current_morph is not None:
-        #         new_morphs.append(current_morph)
-        #     utterance_info_list[suw_index].morphs = new_morphs
-
-        # # Step 3. LUW情報を元に文節区切りをつける
-        # # luw_df = pd.read_csv(self.luw_filename, encoding='shift-jis')
-        # for suw_index in range(len(utterance_info_list)):
-        #     speaker_label = utterance_info_list[suw_index].speaker_label
-        #     start_time = utterance_info_list[suw_index].start_time
-        #     end_time = utterance_info_list[suw_index].end_time
-        #     morphs = utterance_info_list[suw_index].morphs
-
-        #     # print("###")
-        #     # print(speaker_label, start_time, end_time)
-
-        #     # 当該話者の当該発話単位のLUW情報を取得
-        #     subdf_suw = luw_df[(luw_df['話者ラベル'] == speaker_label) & \
-        #                    (luw_df['転記単位の開始時刻'] >= start_time) & \
-        #                    (luw_df['転記単位の終了時刻'] <= end_time)]
-        #     # # subdfの最後の終了時刻が end_time と等しく無い場合は，もう一つ後ろのLUW情報を取得
-        #     # # たぶん．1つで十分だと思うが例外もあるかも...
-        #     # if len(subdf_suw) > 0 and subdf_suw['転記単位の終了時刻'].iloc[-1] != end_time:
-        #     #     last_index = subdf_suw.index[-1]
-        #     #     next_subdf = luw_df.iloc[last_index + 1:last_index + 2]
-        #     #     subdf_suw = pd.concat([subdf_suw, next_subdf], axis=0)
-
-        #     if len(subdf_suw) == 0:
-        #         # 警告を表示
-        #         print('Warning: No LUW information for speaker {} at {}-{}'.format(speaker_label, start_time, end_time), flush=True)
-        #         continue
-
-        #     luw_index = 0
-        #     # print(subdf)
-        #     luw_pron = subdf_suw['発音'].iloc[0]
-        #     luw_brace_flag = False
-        #     if luw_pron.startswith('('):
-        #         luw_pron = luw_pron[1:-1]
-        #         luw_brace_flag = True
-        #     for suw_index in range(len(morphs)):
-        #         suw_pron = morphs[suw_index].pron
-        #         for suw_pron_char in suw_pron:
-        #             if luw_pron[0] == suw_pron_char:
-        #                 luw_pron = luw_pron[1:]
-        #             else:
-        #                 # SUW側に余計な文字が入っていることがあるのでスキップ
-        #                 # 警告を表示
-        #                 print('Warning: LUW and SUW are not matched: {} vs. {} at {}'.format(luw_pron, suw_pron, (speaker_label, start_time, end_time)), flush=True)
-        #                 # print(morphs)
-        #                 # print(speaker_label, suw_index, suw_pron)
-        #                 # print(luw_pron)
-        #                 # print(subdf)
-        #                 continue
-        #         if len(luw_pron) == 0:
-        #             if luw_brace_flag:
-        #                 luw_index += 1
-        #                 while luw_index < len(subdf_suw) - 1 and subdf_suw['発音'].iloc[luw_index].startswith('('):
-        #                     luw_index += 1
-        #                 luw_brace_flag = False
-        #             else:
-        #                 luw_index += 1
-                    
-        #             if luw_index < len(subdf_suw):
-        #                 luw_pron = subdf_suw['発音'].iloc[luw_index]
-        #                 if luw_pron.startswith('('):
-        #                     luw_pron = luw_pron[1:-1]
-        #                     luw_brace_flag = True
-        #                 if subdf_suw['文節頭フラグ'].iloc[luw_index] == 'B':
-        #                     morphs[suw_index].has_border = True
-        #             else:
-        #                 luw_pron = ''
-        
-        # Step. 4. 発話テキストを生成
-        for suw_index in range(len(utterance_info_list)):
-            morphs = utterance_info_list[suw_index].morphs
-            tokens = []
+        # Step. 2. 発話単位の text, pron, tags, pos を生成
+        for i in range(len(utterance_info_list)):
+            morphs = utterance_info_list[i].morphs
+            text_tokens, pron_tokens, tag_tokens, pos_tokens = [], [], [], []
             for j in range(len(morphs)):
-                if morphs[j].is_disfluency:
-                    continue
-                tokens_ = [morphs[j].text]
+                if j > 0 and morphs[j].bunsetsu_head_flag == 'B':
+                    # 文節頭フラグがBの場合は前の形態素との間に | を挿入
+                    text_tokens.append('|')  # 
+                    pron_tokens.append('|')  # 
+                    tag_tokens.append('|')   #
+                    pos_tokens.append('|')   #
+
+                # 書字形の処理
                 if morphs[j].is_privacy:
-                    tokens_ = ['<mask>']
-                if morphs[j].is_filler:
-                    tokens_ = ['<F>'] + tokens_ + ['</F>']
-                if morphs[j].has_pause:
-                    # tokens_.append('、') 
-                    tokens_.insert(0, '、')
-                tokens_ = [t.replace('◇', '') for t in tokens_]
-                tokens_ = [t for t in tokens_ if t != '']
-                if '<mask>' in tokens_ and len(tokens) > 0 and tokens[-1] == '<mask>':
-                    continue
-                if len(tokens_) > 0:
-                    tokens.extend(tokens_)
-            utterance_info_list[suw_index].utterance_text = ' '.join(tokens)
-        
-        # Step 5. 発話発音を生成
-        for suw_index in range(len(utterance_info_list)):
-            morphs = utterance_info_list[suw_index].morphs
-            tokens = []            
-            for j in range(len(morphs)):
-                moras = split_pront_to_mora(morphs[j].pron)
+                    text_tokens.append('<mask>')
+                elif 'X' in morphs[j].tags or 'R' in morphs[j].tags:
+                    text_tokens.append('<mask>')
+                elif '◇' in morphs[j].text:
+                    text_tokens.append('<mask>')
+                else:
+                    text_tokens.append(morphs[j].text)
 
-                if morphs[j].is_disfluency:
-                    moras = [x + '+D' for x in moras]
-                elif morphs[j].is_filler:
-                    moras = [x + '+F' for x in moras]
-
+                # 発音形の処理
                 if morphs[j].is_privacy:
-                    moras = ['<mask>']
+                    pron_tokens.append('<mask>')
+                elif 'X' in morphs[j].tags or 'R' in morphs[j].tags:
+                    pron_tokens.append('<mask>')
+                elif '◇' in morphs[j].pron:
+                    pron_tokens.append('<mask>')
+                elif morphs[j].pron.startswith('(') and morphs[j].pron.endswith(')'):
+                    pron = morphs[j].pron[1:-1]  # 括弧を除去
+                    if len(pron_tokens) > 0 and pron_tokens[-1] == pron:
+                        pron_tokens.append('*')
+                    else:
+                        pron_tokens.append(pron)
+                else:
+                    pron_tokens.append(morphs[j].pron)
 
-                if morphs[j].has_pause:
-                    # moras.append('<sp>')
-                    moras.insert(0, '<sp>')
-                elif morphs[j].has_border and len(moras) > 0:
-                    moras += ['|']
+                # タグの処理
+                tag_tokens.append('/'.join(morphs[j].tags))
 
-                tokens.extend(moras)
-            
-            while len(tokens) > 0 and tokens[-1] == '|':
-                tokens.pop()
+                # 品詞の処理
+                pos_tokens.append(morphs[j].pos)
 
-            utterance_info_list[suw_index].utterance_pron = ' '.join(tokens) 
+            utterance_info_list[i].text = ' '.join(text_tokens)
+            utterance_info_list[i].pron = ' '.join(pron_tokens)
+            utterance_info_list[i].tag = ','.join(tag_tokens)
+            utterance_info_list[i].pos = ' '.join(pos_tokens)
 
-        # Step 6. 発話IDを付与
+        # Step 3. 発話IDを付与
         label2id = self.speaker_info['label2id']
         id2wavfilename = self.speaker_info['id2wavfilename']
-        for suw_index in range(len(utterance_info_list)):
-            speaker_id = label2id[utterance_info_list[suw_index].speaker_label]
+        for i in range(len(utterance_info_list)):
+            speaker_id = label2id[utterance_info_list[i].speaker_label]
             wav_filename = id2wavfilename[speaker_id]
             if wav_filename is None:
                 # 警告を表示
                 # print('Warning: No wav filename for speaker {}'.format(speaker_id))
                 continue
             wav_filename = wav_filename.replace('.wav', '')
-            start_time = int(utterance_info_list[suw_index].start_time * 1000)
-            end_time = int(utterance_info_list[suw_index].end_time * 1000)
+            start_time = int(utterance_info_list[i].start_time * 1000)
+            end_time = int(utterance_info_list[i].end_time * 1000)
 
-            utterance_info_list[suw_index].utterance_id = \
+            utterance_info_list[i].utterance_id = \
                 f"{speaker_id}_{wav_filename}_{start_time:07d}_{end_time:07d}"
             
         # Step 7. 0.1秒未満，10秒以上，発音形が空のものを削除
         utterance_info_list_ = []
         for utterance_info in utterance_info_list:
             duration = utterance_info.end_time - utterance_info.start_time
-            if duration < 0.1:
-                # 警告を表示
-                print('Warning: Too SHORT utterance: {}: {:7.3f}s {}'.format(utterance_info.utterance_id, duration, utterance_info.utterance_pron), flush=True)
-                continue
+            # if duration < 0.1:
+            #     # 警告を表示
+            #     print('Warning: Too SHORT utterance: {}: {:7.3f}s {}'.format(utterance_info.utterance_id, duration, utterance_info.utterance_pron), flush=True)
+            #     continue
 
             if duration > 10.0:
                 # 警告を表示
-                print('Warning: Too LONG  utterance: {}: {:7.3f}s {}'.format(utterance_info.utterance_id, duration, utterance_info.utterance_pron), flush=True)
-                continue
+                print('Warning: Too LONG  utterance: {}: {:7.3f}s {}'.format(utterance_info.utterance_id, duration, utterance_info.pron), flush=True)
+                # continue
 
-            if len(utterance_info.utterance_pron) < 1: 
-                # 警告を表示
-                print('Warning: No pron: {}, {:7.3f}s'.format(utterance_info.utterance_id, duration), flush=True)
-                continue
+            # if len(utterance_info.utterance_pron) < 1: 
+            #     # 警告を表示
+            #     print('Warning: No pron: {}, {:7.3f}s ({})'.format(utterance_info.utterance_id, duration, utterance_info.utterance_text), flush=True)
+            #     continue
 
             utterance_info_list_.append(utterance_info)
 
