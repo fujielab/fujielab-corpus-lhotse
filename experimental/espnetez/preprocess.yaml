@@ -1,0 +1,12 @@
+use_preprocessor: true
+
+token_type: char
+
+cleaner: null
+g2p: null
+preprocessor: default
+preprocessor_conf:
+  speech_name: speech
+  text_name: text
+
+token_list: ./tokens.txt
